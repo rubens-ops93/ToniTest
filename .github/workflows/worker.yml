@@ -1,0 +1,70 @@
+name: Scheduled worker
+on:
+  schedule:
+    # Alternating hour offsets preserve eight-minute gaps across hour boundaries.
+    - cron: '0,8,16,24,32,40,48,56 0-23/2 * * *'
+    - cron: '4,12,20,28,36,44,52 1-23/2 * * *'
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: scheduled-worker
+  cancel-in-progress: false
+jobs:
+  poll:
+    if: vars.ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run private application without publishing its output
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, os, pathlib, shutil, subprocess, sys, tempfile, time
+          def run(args, cwd=None):
+              subprocess.run(args,cwd=cwd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+          root=None
+          try:
+              for key in ('PRIVATE_REPOSITORY','PRIVATE_REPO_TOKEN','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID'):
+                  if not os.environ.get(key): raise RuntimeError('configuration')
+              repository=os.environ['PRIVATE_REPOSITORY']
+              import re
+              if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',repository):
+                  raise RuntimeError('configuration')
+              auth=base64.b64encode(('x-access-token:'+os.environ['PRIVATE_REPO_TOKEN']).encode()).decode()
+              git=['git','-c','http.https://github.com/.extraheader=AUTHORIZATION: basic '+auth]
+              root=tempfile.mkdtemp(prefix='private-worker-')
+              app=pathlib.Path(root)/'app'
+              run(git+['clone','--quiet','--depth','1','--branch','main','https://github.com/'+repository+'.git',str(app)])
+              run([sys.executable,'-m','venv',str(pathlib.Path(root)/'venv')])
+              python=str(pathlib.Path(root)/'venv/bin/python')
+              run([python,'-m','pip','install','--quiet','youtube-transcript-api==1.2.4'])
+              run([python,'-m','unittest','discover','-s','tests'],app)
+              run([python,'bot.py'],app)
+              run(['git','config','user.name','github-actions[bot]'],app)
+              run(['git','config','user.email','41898282+github-actions[bot]@users.noreply.github.com'],app)
+              (app/'data/transcripts').mkdir(parents=True,exist_ok=True)
+              run(['git','add','data/state.json','data/transcripts'],app)
+              changed=subprocess.run(['git','diff','--cached','--quiet'],cwd=app,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
+              if changed not in (0,1): raise RuntimeError('state')
+              if changed:
+                  run(['git','commit','--quiet','-m','Update monitor state'],app)
+                  for attempt in range(3):
+                      try:
+                          run(git+['pull','--quiet','--rebase','origin','main'],app)
+                          run(git+['push','--quiet','origin','main'],app)
+                          break
+                      except subprocess.CalledProcessError:
+                          if attempt==2: raise
+                          time.sleep((attempt+1)*5)
+              print('Worker completed.')
+          except Exception:
+              print('Worker failed; private diagnostic output is suppressed.')
+              sys.exit(1)
+          finally:
+              if root: shutil.rmtree(root,ignore_errors=True)
+          PY
