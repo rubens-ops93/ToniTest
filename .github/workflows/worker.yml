@@ -4,6 +4,9 @@ on:
     # Alternating hour offsets preserve eight-minute gaps across hour boundaries.
     - cron: '0,8,16,24,32,40,48,56 0-23/2 * * *'
     - cron: '4,12,20,28,36,44,52 1-23/2 * * *'
+  push:
+    branches: [main]
+    paths: ['.github/workflows/worker.yml']
   workflow_dispatch:
 permissions: {}
 concurrency:
@@ -11,7 +14,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   poll:
-    if: vars.ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -28,6 +30,7 @@ jobs:
           def run(args, cwd=None):
               subprocess.run(args,cwd=cwd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
           root=None
+          stage='configuration'
           try:
               for key in ('PRIVATE_REPOSITORY','PRIVATE_REPO_TOKEN','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID'):
                   if not os.environ.get(key): raise RuntimeError('configuration')
@@ -39,12 +42,17 @@ jobs:
               git=['git','-c','http.https://github.com/.extraheader=AUTHORIZATION: basic '+auth]
               root=tempfile.mkdtemp(prefix='private-worker-')
               app=pathlib.Path(root)/'app'
+              stage='private access'
               run(git+['clone','--quiet','--depth','1','--branch','main','https://github.com/'+repository+'.git',str(app)])
+              stage='dependencies'
               run([sys.executable,'-m','venv',str(pathlib.Path(root)/'venv')])
               python=str(pathlib.Path(root)/'venv/bin/python')
               run([python,'-m','pip','install','--quiet','youtube-transcript-api==1.2.4'])
+              stage='validation'
               run([python,'-m','unittest','discover','-s','tests'],app)
+              stage='application'
               run([python,'bot.py'],app)
+              stage='private state persistence'
               run(['git','config','user.name','github-actions[bot]'],app)
               run(['git','config','user.email','41898282+github-actions[bot]@users.noreply.github.com'],app)
               (app/'data/transcripts').mkdir(parents=True,exist_ok=True)
@@ -63,7 +71,7 @@ jobs:
                           time.sleep((attempt+1)*5)
               print('Worker completed.')
           except Exception:
-              print('Worker failed; private diagnostic output is suppressed.')
+              print('Worker failed during '+stage+'; private diagnostic output is suppressed.')
               sys.exit(1)
           finally:
               if root: shutil.rmtree(root,ignore_errors=True)
