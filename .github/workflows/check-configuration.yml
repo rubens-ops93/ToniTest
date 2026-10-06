@@ -1,0 +1,28 @@
+name: Check configuration
+on:
+  push:
+    paths: ['.github/workflows/check-configuration.yml']
+  workflow_dispatch:
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify required configuration without displaying values
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 - <<'PY'
+          import os,sys
+          names=('PRIVATE_REPOSITORY','PRIVATE_REPO_TOKEN','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID')
+          missing=[]
+          for name in names:
+              present=bool(os.environ.get(name))
+              print(name+(': present' if present else ': missing'))
+              if not present: missing.append(name)
+          sys.exit(1 if missing else 0)
+          PY
