@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # Load the current private application, validate it, and keep its output private.
+      # Validate the current private application before executing it; keep its output private.
       - name: Run private application without publishing its output
         env:
           PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
