@@ -1,11 +1,11 @@
-# Scheduled worker
+# Generic private-application worker
 
-A generic eight-minute scheduler for a separately maintained private application.
+This public repository contains only a generic launcher and its cadence tests. Application code, configuration, portfolio data, transcripts, health and notification delivery checkpoints remain in a separately maintained private repository. No private subprocess output, artifacts or caches are published. Public observers can see this repository, its owner and workflow timing/status.
 
-Only this launcher is public. Application code, configuration, portfolio data, transcripts and state are stored in a private repository. No private output, artifacts or caches are published by this workflow. Public observers can see this repository, its owner and workflow timing/status.
+The scheduler requests a block twice an hour, at minute 03 and 33 UTC. Each started scheduled/manual block performs four private application checks, eight minutes apart, and persists state after each check even if the application reports an error. Publication checks perform one cycle. A block is bounded to 40 minutes. GitHub may delay block starts and transitions; this is not a guaranteed always-on service. Standard ubuntu-latest runners are used.
 
-The workflow is active on an eight-minute schedule and can also be started manually. It requires the Actions secrets `PRIVATE_REPOSITORY`, `PRIVATE_REPO_TOKEN`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. The private-repository credential should be a fine-grained token restricted to that one repository, with Contents read/write permission and an expiration date.
+Required Actions secrets: PRIVATE_REPOSITORY, PRIVATE_REPO_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID. The private token should be fine-grained, Contents read/write on only the private application repository, with an expiration date. Keep the former private automatic scheduler disabled. The private application entry point is run_cycle.py, and its tests run before each check.
 
-There are no pull-request triggers. Contributors must not be granted write access unless trusted with the private application and its credentials. Never enable Actions debug logging or add public logs, caches or artifacts containing private application output.
+Optional paid source-content analysis stays off unless an API key, an explicit model and ALLOW_PAID_SUMMARIES=true are all configured. A daily request cap is separate from any monetary budget. Never set that flag without the owner's cost approval.
 
-The previous automatic scheduler must stay disabled to avoid concurrent polling. Verify successful private state persistence when changing credentials. GitHub scheduled starts can be delayed. Eight-minute polling does not imply a notification every eight minutes.
+No pull-request triggers. Never grant write access to untrusted contributors, enable debug logging for private processes, or publish private artifacts/caches. The temporary checkout is removed when the block exits. Private output remains suppressed; only generic cycle status is printed.

@@ -1,79 +1,36 @@
 name: Scheduled worker
 on:
   schedule:
-    # Alternating hour offsets preserve eight-minute gaps across hour boundaries.
-    - cron: '0,8,16,24,32,40,48,56 0-23/2 * * *'
-    - cron: '4,12,20,28,36,44,52 1-23/2 * * *'
+    # Bounded polling blocks avoid a fresh queued start for every individual poll.
+    - cron: '3,33 * * * *'
   push:
     branches: [main]
-    paths: ['.github/workflows/worker.yml']
+    paths: ['.github/workflows/worker.yml', 'public_worker.py', 'tests/test_worker.py']
   workflow_dispatch:
-permissions: {}
+permissions:
+  contents: read
 concurrency:
   group: scheduled-worker
   cancel-in-progress: false
 jobs:
   poll:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 40
     steps:
-      # Validate the current private application before executing it; keep its output private.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify generic worker cadence
+        run: python3 -m unittest discover -s tests
       - name: Run private application without publishing its output
         env:
           PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import base64, os, pathlib, shutil, subprocess, sys, tempfile, time
-          def run(args, cwd=None):
-              subprocess.run(args,cwd=cwd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-          root=None
-          stage='configuration'
-          try:
-              for key in ('PRIVATE_REPOSITORY','PRIVATE_REPO_TOKEN','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID'):
-                  if not os.environ.get(key): raise RuntimeError('configuration')
-              repository=os.environ['PRIVATE_REPOSITORY']
-              import re
-              if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',repository):
-                  raise RuntimeError('configuration')
-              auth=base64.b64encode(('x-access-token:'+os.environ['PRIVATE_REPO_TOKEN']).encode()).decode()
-              git=['git','-c','http.https://github.com/.extraheader=AUTHORIZATION: basic '+auth]
-              root=tempfile.mkdtemp(prefix='private-worker-')
-              app=pathlib.Path(root)/'app'
-              stage='private access'
-              run(git+['clone','--quiet','--depth','1','--branch','main','https://github.com/'+repository+'.git',str(app)])
-              stage='dependencies'
-              run([sys.executable,'-m','venv',str(pathlib.Path(root)/'venv')])
-              python=str(pathlib.Path(root)/'venv/bin/python')
-              run([python,'-m','pip','install','--quiet','youtube-transcript-api==1.2.4'])
-              stage='validation'
-              run([python,'-m','unittest','discover','-s','tests'],app)
-              stage='application'
-              run([python,'bot.py'],app)
-              stage='private state persistence'
-              run(['git','config','user.name','github-actions[bot]'],app)
-              run(['git','config','user.email','41898282+github-actions[bot]@users.noreply.github.com'],app)
-              (app/'data/transcripts').mkdir(parents=True,exist_ok=True)
-              run(['git','add','data/state.json','data/transcripts'],app)
-              changed=subprocess.run(['git','diff','--cached','--quiet'],cwd=app,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
-              if changed not in (0,1): raise RuntimeError('state')
-              if changed:
-                  run(['git','commit','--quiet','-m','Update monitor state'],app)
-                  for attempt in range(3):
-                      try:
-                          run(git+['pull','--quiet','--rebase','origin','main'],app)
-                          run(git+['push','--quiet','origin','main'],app)
-                          break
-                      except subprocess.CalledProcessError:
-                          if attempt==2: raise
-                          time.sleep((attempt+1)*5)
-              print('Worker completed.')
-          except Exception:
-              print('Worker failed during '+stage+'; private diagnostic output is suppressed.')
-              sys.exit(1)
-          finally:
-              if root: shutil.rmtree(root,ignore_errors=True)
-          PY
+          WORKER_CYCLES: ${{ github.event_name == 'push' && '1' || '4' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_SUMMARY_MODEL: ${{ vars.OPENAI_SUMMARY_MODEL }}
+          ALLOW_PAID_SUMMARIES: ${{ vars.ALLOW_PAID_SUMMARIES }}
+          MAX_DAILY_SUMMARIES: ${{ vars.MAX_DAILY_SUMMARIES || '10' }}
+        run: python3 public_worker.py
